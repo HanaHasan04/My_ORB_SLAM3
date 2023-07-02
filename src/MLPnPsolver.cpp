@@ -50,6 +50,7 @@
 
 #include <Eigen/Sparse>
 
+Eigen::Matrix4f cameraPose;
 
 namespace ORB_SLAM3 {
     MLPnPsolver::MLPnPsolver(const Frame &F, const vector<MapPoint *> &vpMapPointMatches):
@@ -138,15 +139,90 @@ namespace ORB_SLAM3 {
 	            vAvailableIndices[randi] = vAvailableIndices.back();
 	            vAvailableIndices.pop_back();
 	        }
-
-            //By the moment, we are using MLPnP without covariance info
-            cov3_mats_t covs(1);
-
-            //Result
+	     
             transformation_t result;
 
-	        // Compute camera pose
-            computePose(bearingVecs,p3DS,covs,indexes,result);
+            // First iteration.
+            if (nCurrentIterations == 1) {
+		 // No covariance information.
+                cov3_mats_t covs(1);
+
+    	        // Initial camera pose estimation.
+                computePose(bearingVecs,p3DS,covs,indexes,result);
+		cameraPose.block<3, 4>(0, 0) = result.cast<float>();
+		cameraPose.block<1, 4>(3, 0) = Eigen::Matrix<float, 1, 4>::Zero();
+            }
+
+            else {
+                vector<bearingVector_t> syntheticObservations;
+
+                // Iterate over each 3D point in p3DS.
+                for (size_t i = 0; i < p3DS.size(); ++i)
+                {
+                    // Transform the 3D point from world to camera coordinates.
+                    Eigen::Vector4f pointWorld;
+                    pointWorld << p3DS[i][0], p3DS[i][1], p3DS[i][2], 1.0;
+                    Eigen::Vector4f pointCamera = cameraPose * pointWorld;
+
+                    // Project the transformed 3D point onto the image plane.
+                    bearingVector_t syntheticObservation;
+                    syntheticObservation[0] = pointCamera[0] / pointCamera[2];
+                    syntheticObservation[1] = pointCamera[1] / pointCamera[2];
+                    syntheticObservation[2] = 1.0;
+
+                    // Store the synthetic observation.
+                    syntheticObservations.push_back(syntheticObservation);
+                }
+
+                vector<cov3_mat_t> covarianceMatrices;
+                vector<bearingVector_t> residuals;
+
+                // Iterate over the synthetic observations and original bearing vectors.
+                for (size_t i = 0; i < syntheticObservations.size(); ++i) {
+                    // Calculate the residual by subtracting the observed bearing vector from the projected synthetic observation.
+                    bearingVector_t residual;
+                    residual[0] = bearingVecs[i][0] - syntheticObservations[i][0];
+                    residual[1] = bearingVecs[i][1] - syntheticObservations[i][1];
+                    residual[2] = bearingVecs[i][2] - syntheticObservations[i][2];
+
+                    // Store the residual.
+                    residuals.push_back(residual);
+                }
+
+                // Mean residual.
+                bearingVector_t meanResidual;
+                meanResidual.setZero();
+                for (const auto& residual : residuals)
+                {
+                    meanResidual += residual;
+                }
+                meanResidual /= residuals.size();
+
+                for (size_t i = 0; i < syntheticObservations.size(); ++i) {
+                    // Calculate the covariance matrix for the current residual.
+                    Eigen::Matrix3d covMatrix;
+                    covMatrix.setZero();
+                    bearingVector_t residualDiff = residuals[i] - meanResidual;
+                    covMatrix += residualDiff * residualDiff.transpose();
+                    covMatrix /= 2;
+
+                    // Store the covariance matrix in the vector.
+                    covarianceMatrices.push_back(covMatrix);
+                }
+
+                // Store covariance matrices in 'covs'.
+                cov3_mats_t covs(indexes.size());
+
+                for (size_t i = 0; i < indexes.size(); ++i) {
+                    covs.push_back(covarianceMatrices[i]);
+                }
+
+                // Compute camera pose.
+                computePose(bearingVecs,p3DS,covs,indexes,result);
+		cameraPose.block<3, 4>(0, 0) = result.cast<float>();
+		cameraPose.block<1, 4>(3, 0) = Eigen::Matrix<float, 1, 4>::Zero();
+            }
+            
 
             //Save result
             mRi[0][0] = result(0,0);
@@ -808,7 +884,7 @@ namespace ORB_SLAM3 {
     void MLPnPsolver::mlpnpJacs(const point_t& pt, const Eigen::Vector3d& nullspace_r,
             					const Eigen::Vector3d& nullspace_s, const rodrigues_t& w,
             					const translation_t& t, Eigen::MatrixXd& jacs){
-    	double r1 = nullspace_r[0];
+    		double r1 = nullspace_r[0];
 		double r2 = nullspace_r[1];
 		double r3 = nullspace_r[2];
 
