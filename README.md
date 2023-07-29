@@ -1,5 +1,62 @@
 # ORB-SLAM3
 
+### Hana Hasan, July 2nd, 2023  
+**Problem**: The current implementation of the MLPnP solver in ORB-SLAM3 lacks the computation of covariance information.  
+```cpp
+        //By the moment, we are using MLPnP without covariance info
+        cov3_mats_t covs(1);
+```
+**However**: The code does handle the case where covariance is given. The `computePose` function takes covariance information into account by incorporating it into the stochastic model represented by matrix _P_. By default, _P_ is initialized as an identity matrix, assuming equal and independent uncertainties for all correspondences.  
+When covariance information is available, the code updates _P_ based on the provided 3D covariance matrices.  
+```cpp
+        // if we do have covariance information
+        // -> fill covariance matrix
+        if (covMats.size() == numberCorrespondences) {
+            use_cov = true;
+            int l = 0;
+            for (size_t i = 0; i < numberCorrespondences; ++i) {
+                // invert matrix
+                cov2_mat_t temp = nullspaces[i].transpose() * covMats[i] * nullspaces[i];
+                temp = temp.inverse().eval();
+                P.coeffRef(l, l) = temp(0, 0);
+                P.coeffRef(l, l + 1) = temp(0, 1);
+                P.coeffRef(l + 1, l) = temp(1, 0);
+                P.coeffRef(l + 1, l + 1) = temp(1, 1);
+                l += 2;
+            }
+        }
+```
+
+**Note [1]**: In the code, the covariance information is represented by an array of 3D covariance matrices, with each correspondence having its own covariance matrix to capture the uncertainty in the estimation.
+```cpp
+        /** An array of 3D covariance matrices */
+        typedef std::vector<cov3_mat_t, Eigen::aligned_allocator<cov3_mat_t> >
+                cov3_mats_t;
+```
+
+**Note [2]**: For the covariance information to be considered available, the size of _covMats_ must match the number of correspondences. i.e., there should be a 3D covariance matrix provided for each 2D-3D correspondence.  
+
+**Our Contribution**: We incorprated covariance information in the MLPnP implementation. We did so in the `iterate` function, before calling the `computePose` function. Steps:  
+- First iteration - ignore the covariance matrices and obtain an initial camera pose estimate. **Note**: `computePose` returns the transformation matrix (rotation + translation) from the 3D world coordinates to the 2D image plane coordinates.
+- Second+ iteration – begin with generating synthetic observations by projecting the 3D points onto the image plane.
+- Compare the synthetic observations with the original bearing vectors by calculating the residuals. 
+- Calculate the mean residual and the covariance matrix for the residuals. 
+
+**Results**: (Camera trajectories. _test_ is ours, _orbslam3_ is the original ORB-SLAM3)   
+
+_machine_hall/MH_04_medium_  
+![image](https://github.com/HanaHasan04/My_ORB_SLAM3/assets/100927079/f2935ec6-5777-40c9-9f96-99fa08f376ad)  
+
+_vicon_room1/V1_02_medium_  
+![image](https://github.com/HanaHasan04/My_ORB_SLAM3/assets/100927079/5dfa8468-efb5-496b-bf6d-56bef5a2fc33)  
+
+_vicon_room2/V2_02_medium_  
+![image](https://github.com/HanaHasan04/My_ORB_SLAM3/assets/100927079/10e4f564-9e79-4b74-aef0-a1aaf2806345)
+
+
+
+
+
 ### V1.0, December 22th, 2021
 **Authors:** Carlos Campos, Richard Elvira, Juan J. Gómez Rodríguez, [José M. M. Montiel](http://webdiis.unizar.es/~josemari/), [Juan D. Tardos](http://webdiis.unizar.es/~jdtardos/).
 
